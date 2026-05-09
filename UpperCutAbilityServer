@@ -1,0 +1,117 @@
+----------------------------
+
+UPPERCUT ABILITY SCRIPT
+
+----------------------------
+
+-- [[ SERVICES & MODULES ]]
+local Events = game.ReplicatedStorage.Events
+local TS = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local RP = game.ReplicatedStorage.Events.Replication -- Used for sending VFX data to all players
+local Hitbox = require(game.ReplicatedStorage.Modules.EzHitbox)
+local Class = require(game.ServerScriptService.R6Ragdoll.ModuleScript) -- Manages ragdoll state
+
+-- [[ STATE MANAGEMENT ]]
+local Cooldown = {} -- Simple table-based debounce to prevent move spamming
+
+-- [[ UTILITY FUNCTIONS ]]
+--- Creates a temporary "State Tag" (Accessory) on a character.
+--- This allows other systems to check for "Stunned" or "Slow" status.
+function CreateInst(Name, P, T)
+	local C = Instance.new("Accessory")
+	C.Parent = P
+	C.Name = Name
+	game.Debris:AddItem(C, T)
+end
+
+-- [[ ABILITY EXECUTION ]]
+Events.Throwdown.OnServerEvent:Connect(function(Player)
+	local Character = Player.Character
+	
+	-- 1. VALIDATION & COOLDOWN: Stop execution if player is on cooldown or character is missing
+	if Cooldown[Character] == true or not Character then return end
+	
+	-- Set a 1-second local cooldown for this specific character
+	Cooldown[Character] = true
+	task.delay(1, function()
+		Cooldown[Character] = false
+	end)
+	
+	local Humanoid = Character.Humanoid
+	local RootPart = Character.HumanoidRootPart
+	local Animator = Humanoid.Animator
+	local Anim = script.Hit -- The animation object stored inside the script
+	
+	-- 2. INITIAL EFFECTS: Fire a "RingDash" effect to all clients at the start of the dash
+	RP:FireAllClients({
+		Effect = "RingDash",
+		CFrame = RootPart.CFrame,
+	})
+	
+	-- 3. STATE LOCKOUT: Apply "Slow" and "NoM1" tags so the player can't attack or run during the move
+	local Track = Animator:LoadAnimation(Anim)
+	CreateInst("Slow", Character, 1)
+	CreateInst("NoM1", Character, 1)
+	
+	-- 4. CHARACTER LUNGE: Use BodyVelocity to propel the player forward during the wind-up
+	local bv = Instance.new("BodyVelocity")
+	bv.Parent = RootPart
+	bv.MaxForce = Vector3.new(1,1,1) * 1000000
+	bv.P = 1250
+	bv.Velocity = RootPart.CFrame.LookVector * 135 -- High speed forward dash
+	game.Debris:AddItem(bv, .1) -- Immediate cleanup for a "burst" of movement
+	
+	Track:Play()
+	Track:AdjustSpeed(1)
+	Track:AdjustWeight(1)
+	
+	-- 5. HIT DETECTION (Animation Event): Logic triggers when the animation reaches the "hit" marker
+	Track:GetMarkerReachedSignal("hit"):Connect(function()
+		-- Visual flair at the point of impact
+		RP:FireAllClients({
+			Effect = "RingDash",
+			CFrame = RootPart.CFrame,
+		})
+
+		-- Create a spatial hitbox to find potential victims
+		Hitbox:Create({
+			Caster = Character,
+			CFrame = RootPart.CFrame,
+			Size = Vector3.new(10,10,10),
+			Touched = function(Enemy: Model)
+				local EnemyHumanoid = Enemy:FindFirstChildOfClass("Humanoid")
+				if not EnemyHumanoid then return end
+				
+				-- Apply damage and trigger client-side "HitThrow" VFX
+				EnemyHumanoid:TakeDamage(5)
+				RP:FireAllClients({
+					Effect = "HitThrow",
+					CFrame = Enemy.HumanoidRootPart.CFrame,
+				})
+				
+				-- 6. THE UPPERCUT PHYSICS: Propel the enemy Forward AND Upward
+				local enemyRoot = Enemy:FindFirstChild("HumanoidRootPart")
+				if enemyRoot then
+					local ebv = Instance.new("BodyVelocity")
+					ebv.Parent = enemyRoot
+					ebv.MaxForce = Vector3.new(1,1,1) * 100000000
+					ebv.P = 1250
+					-- Direction: LookVector * 45 (Forward) + UpVector * 100 (Upward)
+					ebv.Velocity = RootPart.CFrame.LookVector * 45 + RootPart.CFrame.UpVector * 100
+					game.Debris:AddItem(ebv, .1)
+				end
+				
+				-- 7. CROWD CONTROL: Stun and Ragdoll the enemy for 5 seconds
+				CreateInst("Stunned", Enemy, 5)
+				Class:Ragdoll(Enemy)
+				
+				task.delay(5, function()
+					Class:Unragdoll(Enemy)
+				end)
+			end,
+		})
+		-- Stop the animation immediately after the hitbox is processed
+		Track:Stop()
+	end)
+end)
