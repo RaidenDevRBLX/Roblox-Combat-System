@@ -1,0 +1,94 @@
+----------------------------
+
+---EFFECTS MODULE
+
+----------------------------
+
+---dev_raiden on Discord
+
+-- [[ MODULE SETUP ]]
+local Effect = {}
+local Assets = game.ReplicatedStorage.Resource -- Where the 3D models/rings/particles are stored
+
+-- [[ MAIN HANDLER ]]
+-- Data: A table containing information like the effect name (Effect) and where it happens (CFrame)
+Effect.Receive = function(Data)
+	local FX = Data.Effect
+
+	-- Helper function to find and trigger all ParticleEmitters within a cloned asset
+	local function Emit(FX)
+		for _, item in pairs(FX:GetDescendants()) do
+			if item:IsA("ParticleEmitter") then
+				-- Uses an attribute 'EmitCount' if set, otherwise defaults to 5 particles
+				item:Emit(item:GetAttribute("EmitCount") or 5)
+			end
+		end
+	end
+
+	-- Triggered at the start of the dash/uppercut move
+	if FX == "RingDash" then
+		local RingFCT = Assets.Ring:Clone() -- Clone a circular mesh
+		RingFCT.Parent = workspace.Debris
+		-- Rotate the ring so it faces the direction of the dash
+		RingFCT.CFrame = Data.CFrame * CFrame.Angles(0, math.rad(90), math.rad(90))
+		RingFCT.Size = Vector3.new(0.1, 0.1, 0.1) -- Start small for a "pop" effect
+
+		-- Calls a separate Wind module (likely for trail or air-streak effects)
+		require(script.Wind)(Data.CFrame * CFrame.Angles(0, math.rad(90), math.rad(90)) , workspace.Debris)
+
+		local TweenService = game:GetService("TweenService")
+
+		-- Animation: Rapidly expand the ring and make it slightly transparent
+		local expandTween = TweenService:Create(RingFCT, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = Vector3.new(15,1, 15),
+			Transparency = 0.8
+		})
+
+		-- Animation: Fade the ring out completely
+		local fadeTween = TweenService:Create(RingFCT, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			Transparency = 1
+		})
+
+		expandTween:Play()
+		fadeTween:Play()
+
+		game.Debris:AddItem(RingFCT, 0.6) -- Cleanup to prevent memory leaks
+
+		-- Similar to RingDash, but rotated at a 45-degree angle to match an upward trajectory
+	elseif FX == "Uphitthrow" then
+		local RingFCT = Assets.Ring:Clone()
+		RingFCT.Parent = workspace.Debris
+		RingFCT.CFrame = Data.CFrame * CFrame.Angles(0, math.rad(90), math.rad(45))
+		RingFCT.Size = Vector3.new(0.1, 0.1, 0.1)
+
+		require(script.Wind)(Data.CFrame * CFrame.Angles(0, math.rad(90), math.rad(45)) , workspace.Debris)
+
+		local TweenService = game:GetService("TweenService")
+
+		local expandTween = TweenService:Create(RingFCT, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = Vector3.new(15,1, 15),
+			Transparency = 0.8
+		})
+
+		local fadeTween = TweenService:Create(RingFCT, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			Transparency = 1
+		})
+
+		expandTween:Play()
+		fadeTween:Play()
+
+		game.Debris:AddItem(RingFCT, 0.6)
+
+		-- Triggered when the move actually impacts the enemy
+	elseif FX == "HitThrow" then
+		local VFX = Assets.HitThrowdown:Clone() -- Likely a group of particles/impact meshes
+		VFX.Parent = workspace.Debris
+		VFX.CFrame = Data.CFrame
+
+		Emit(VFX) -- Activate/Emits the particles
+		game.Debris:AddItem(VFX, .6) -- Quick cleanup
+	end
+
+end
+
+return Effect
