@@ -1,174 +1,173 @@
-----------------------------
+--------------------------------------------
 
----MAIN COMBAT SCRIPT
+---Gilgamesh Gate Of Babylon Script
 
----dev_raiden on Discord
+---By dev_raiden on Discord for HiddenDevs Application!
 
-----------------------------
+--------------------------------------------
 
--- [[ SERVICES & MODULES ]]
-local Events = game.ReplicatedStorage.Events
-local Hitbox = require(game.ReplicatedStorage.Modules.EzHitbox)
+-- [[ SERVICES ]]
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Debris = game:GetService("Debris")
 
--- [[ STATE MANAGEMENT ]]
--- Stores the timestamp of the last punch for each character model to handle combo resets
-local LastPunch = {}
+-- [[ PLAYER & CAMERA ]]
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootpart = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
 
--- [[ LOGIC FUNCTIONS ]]
+-- [[ ASSETS & MODULES ]]
+local PortalTemplate = ReplicatedStorage.VFXFolder.Anime.GateOfBabylon:WaitForChild("Portal")
+local vfxhelp = require(game.ReplicatedStorage.VFXHelper) -- Utility for emitting particles
+local rock = require(game.ReplicatedStorage.Crater_Module) -- Handles ground/explosion debris
+local shake = require(game.ReplicatedStorage.CameraShaker) -- Handles procedural camera shaking
 
---- Handles the logic for cycling through the 4-hit combo sequence.
---- It uses attributes on the Character model to sync state across the server.
-function ChangeCombo(Char: Model)
-	-- Initialize combo attribute if it doesn't exist
-	if not Char:GetAttribute('Combo') then
-		Char:SetAttribute('Combo', 1)
-	end
+-- [[ TWEEN CONFIGURATION ]]
+-- Multiple TweenInfos used for different parts of the visual expansion and fading
+local info4 = TweenInfo.new(0.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+local info5 = TweenInfo.new(0.5, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
 
-	local currentTime = tick()
+-- [[ CAMERA SHAKE INITIALIZATION ]]
+local camShake = shake.new(Enum.RenderPriority.Camera.Value, function(shakeCFrame)
+	camera.CFrame = camera.CFrame * shakeCFrame
+end)
+camShake:Start()
 
-	if LastPunch[Char] then
-		-- Reset combo to 1 if the player waits too long (1.5s cooldown window)
-		if (currentTime - LastPunch[Char]) >= 1.5 then
-			Char:SetAttribute('Combo', 1)
-		else
-			-- Advance the combo or reset it back to 1 if the 4th hit was reached
-			if Char:GetAttribute('Combo') >= 4 then
-				Char:SetAttribute('Combo', 1)
-			else
-				Char:SetAttribute('Combo', Char:GetAttribute('Combo') + 1)
-			end
-		end
-	else
-		-- First time punching
-		Char:SetAttribute('Combo', 1)
-	end
+-- Continuous loop to ensure camera shake is relative to the camera's current position
+RunService.Heartbeat:Connect(function()
+	camShake:SetReferencePosition(camera.CFrame.Position)
+end)
 
-	-- Update the character's last activity timestamp
-	LastPunch[Char] = currentTime
-
-	return Char:GetAttribute('Combo')
-end
-
---- Utility function to create "State Tags". 
---- By parenting an Accessory (acting as a tag) to the Character, other scripts 
---- can check for "Stunned" or "NoM1" status using FindFirstChild.
-function CreateInst(Name, P, T)
-	local C = Instance.new("Accessory")
-	C.Parent = P
-	C.Name = Name
-	game.Debris:AddItem(C, T) -- Automatically cleans up the tag after T seconds
-end
-
--- [[ MAIN EVENT HANDLER ]]
-
-Events.Punch.OnServerEvent:Connect(function(player)
-	-- 1. VALIDATION: Ensure the character and its core components exist before proceeding
-	local Char = player.Character
-	if not Char then return end
-
-	local Humanoid = Char.Humanoid
-	if not Humanoid then return end
-
-	local RootPart = Char.HumanoidRootPart
-	if not RootPart then return end
-
-	local Animator = Humanoid.Animator
-	if not Animator then return end
-
-	-- 2. DEBOUNCE/STUN CHECK: Prevent attacking if already mid-swing, stunned, or on "NoM1" cooldown
-	if Char:GetAttribute("Attacking") == true or Char:FindFirstChild("NoM1") or Char:FindFirstChild("Stunned") then 
-		return 
-	end
-
-	-- 3. COMBO CALCULATION: Determine which swing in the sequence to play
-	local currentCombo = ChangeCombo(Char)
-
-	-- If this is the "finisher" (Hit 4), apply a 1-second lockout (NoM1)
-	if currentCombo >= 4 then
-		CreateInst("NoM1", Char, 1)
-	end
-
-	-- 4. ANIMATION HANDLING: Fetch the corresponding animation from ServerStorage
-	local animation = game.ServerStorage.M1s[currentCombo]
-	if not animation then return end
-
-	local Anim = Animator:LoadAnimation(animation):: AnimationTrack
-	if not Anim then return end
-
-	-- Set 'Attacking' attribute to true to lock out other actions until the animation ends
-	Char:SetAttribute("Attacking", true)
-	Anim.Priority = Enum.AnimationPriority.Action
-	Anim:Play()
-
-	-- Clean up 'Attacking' state once the swing finishes
-	Anim.Stopped:Connect(function()
-		Char:SetAttribute("Attacking", false)
-	end)
-
-	-- 5. HITBOX PARAMETERS: Define the impact of the current swing
-	local hitboxSize = Vector3.new(5,5,5)
-	local knockbackForce = 15
-	local stunDuration = 0.8
-
-	-- Buff the finisher hit with high knockback and longer stun
-	if currentCombo >= 4 then
-		knockbackForce = 122
-		stunDuration = 1
-	end
-
-	-- Small delay before the hitbox activates to sync with the "active" frames of the animation
-	task.wait(.08)
-
-	-- 6. HITBOX EXECUTION: Uses the EzHitbox module to detect targets
-	Hitbox:Create({
-		Caster = Char,
-		CFrame = RootPart.CFrame,
-		Size = hitboxSize,
-		Touched = function(Enemy: Model)
-			if not Enemy or Enemy == Char then return end
-
-			local EnemyHumanoid = Enemy:FindFirstChildOfClass("Humanoid")
-			if not EnemyHumanoid then return end
-
-			-- Apply damage
-			EnemyHumanoid:TakeDamage(0.5)
-
-			-- Play "Hit Reaction" animation on the enemy
-			local hitAnim = game.ServerStorage.Hit['Hit1']
-			if hitAnim then
-				local EnemyAnimator = EnemyHumanoid.Animator
-				if EnemyAnimator then
-					local AnimHit = EnemyAnimator:LoadAnimation(hitAnim)
-					if AnimHit then
-						AnimHit:Play()
+-- [[ ABILITY ACTIVATION ]]
+UIS.InputBegan:Connect(function(i, g)
+	if g then return end -- Ignore input if player is typing in chat
+	
+	-- Checks if the key pressed matches the "Key" attribute assigned to the script
+	if i.KeyCode == Enum.KeyCode[script:GetAttribute("Key")] then
+		local root = rootpart.CFrame -- Current position/rotation of the player
+		
+		-- Loop to spawn 25 individual portals
+		for i = 1, 25 do
+			-- 1. SPATIAL MATH: Calculate random offsets for portal spawning (behind/above player)
+			-- and random target offsets (where the swords should aim)
+			local random1 = math.random(-120, 120)
+			local random2 = math.random(20, 100)
+			local random3 = math.random(-30, -120)
+			local random4 = math.random(-65, 65)
+			
+			-- Portal CFrame math: Places portal in a shell around the player
+			local randomcf = CFrame.new(random1, math.random(50, 150), random2)
+			local randomcf2 = CFrame.new(random4, 0, random3)
+			
+			-- 2. PORTAL CREATION
+			local portal = PortalTemplate:Clone()
+			portal.Parent = workspace.Derbis
+			-- Aim the portal from its random shell position toward the target area
+			portal.PrimaryPart.CFrame = CFrame.lookAt((root * randomcf).Position, (root * randomcf2).Position)
+			
+			vfxhelp.Emit(portal) -- Play portal entry particles
+			game.Debris:AddItem(portal, 8)
+			
+			-- Play portal appearance sound
+			local sfx = game.ReplicatedStorage.SFX.Misc.Eerie.Appear:Clone()
+			sfx.Parent = portal.PrimaryPart
+			sfx.Volume = 4
+			sfx:Play()
+			
+			local hit = false -- Variable to track if the projectile hits something
+			
+			-- 3. PROJECTILE FIRING (Delayed after portal opens)
+			task.delay(2 + math.random() * 0.3, function()
+				-- Firing SFX
+				local sfxShoot = game.ReplicatedStorage.SFX.Combat.Swings.Shoot:Clone()
+				sfxShoot.Parent = portal.PrimaryPart
+				sfxShoot.Volume = 2.5
+				sfxShoot:Play()
+				
+				-- SPIRAL VFX: Create a temporary mesh to visualize the projectile's "trail" or "muzzle flash"
+				local meshvfx = game.ReplicatedStorage.Spiral:Clone()
+				meshvfx.CFrame = portal.PrimaryPart.CFrame * CFrame.new(0, 0, -80) * CFrame.Angles(math.rad(-90), 0, 0)
+				meshvfx.Parent = workspace.Derbis
+				
+				-- Tween the spiral trail to expand and fade
+				local tween = game.TweenService:Create(meshvfx, TweenInfo.new(0.35, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+					Size = Vector3.new(45, 0, 45),
+					Transparency = 1,
+					CFrame = portal.PrimaryPart.CFrame * CFrame.new(0, 0, 10) * CFrame.Angles(math.rad(-90), 0, 0)
+				})
+				tween:Play()
+				
+				-- Localized camera shake for each fire event
+				local shaketest = camShake:ShakeOnce(5, 5, 0, 0.35)
+				shaketest.Position = portal.PrimaryPart.Position
+				
+				-- 4. SWORD PHYSICS
+				local sword = game.ReplicatedStorage.VFXFolder.Anime.GateOfBabylon.Sword:Clone()
+				sword.Parent = workspace.Derbis
+				sword.PrimaryPart.CFrame = CFrame.lookAt(portal.PrimaryPart.Position, (root * randomcf2).Position) * CFrame.Angles(0, math.rad(180), math.rad(-180))
+				sword.Sword.Anchored = false
+				
+				-- Apply velocity to propel the sword forward (multiplied by negative LookVector)
+				local bv = Instance.new("BodyVelocity", sword.PrimaryPart)
+				bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+				bv.Velocity = (sword.PrimaryPart.CFrame.LookVector * -math.random(500, 1000))
+				
+				-- 5. COLLISION DETECTION (Heartbeat Loop)
+				local rs
+				local overpla = OverlapParams.new()
+				overpla.FilterDescendantsInstances = {character, workspace.Derbis}
+				overpla.FilterType = Enum.RaycastFilterType.Exclude
+				
+				local timeout = tick()
+				rs = RunService.Heartbeat:Connect(function()
+					-- Stop checking if projectile has lived longer than 2 seconds
+					if tick() - timeout > 2 then rs:Disconnect() end
+					
+					-- Check if the sword hit any parts in a 15x15x15 box
+					for _, v in pairs(workspace:GetPartBoundsInBox(sword.PrimaryPart.CFrame, Vector3.new(15, 15, 15), overpla)) do
+						if v:IsA("BasePart") and v.CanTouch == true then
+							hit = true
+							rs:Disconnect()
+							
+							-- 6. IMPACT EFFECTS
+							sword.Sword.Anchored = true
+							bv:Destroy()
+							
+							-- Screen Flash VFX
+							local screen = game.ReplicatedStorage.VFXFolder.ScreenEffect:Clone()
+							screen.Parent = player.PlayerGui["Screen Effect"]
+							local tw = game.TweenService:Create(screen, TweenInfo.new(0.3, Enum.EasingStyle.Cubic), {ImageTransparency = 1})
+							tw:Play()
+							
+							-- Spiral Impact Mesh
+							local impactSpiral = game.ReplicatedStorage.Spiral:Clone()
+							impactSpiral.Position = sword.PrimaryPart.Position
+							impactSpiral.Parent = workspace.Derbis
+							local tweenImp = game.TweenService:Create(impactSpiral, TweenInfo.new(0.45), {Size = Vector3.new(70, 0, 70), Transparency = 1})
+							tweenImp:Play()
+							
+							-- Ground/Debris Effect
+							rock:ExplosionRocks({
+								Position = sword.PrimaryPart.Position,
+								Amount = 5,
+								Trail = true
+							})
+							
+							-- Sound & Camera Shake for Impact
+							local sfxExp = game.ReplicatedStorage.SFX.Combat.Explosions["ULTRAKILL - EXPLOSION"]:Clone()
+							sfxExp.Parent = sword.PrimaryPart
+							sfxExp:Play()
+							
+							camShake:ShakeOnce(10, 10, 0, 0.35)
+						end
 					end
-				end
-			end
-
-			-- 7. PHYSICS (KNOCKBACK): 
-			-- Apply a slight forward lunge to the attacker for "flow" (if not a finisher)
-			if currentCombo < 4 then
-				local bv = Instance.new("BodyVelocity")
-				bv.Parent = RootPart
-				bv.MaxForce = Vector3.new(1,1,1) * 1000000
-				bv.P = 1250
-				bv.Velocity = RootPart.CFrame.LookVector * knockbackForce
-				game.Debris:AddItem(bv, 0.1)
-			end
-
-			-- Apply knockback to the enemy
-			local enemyRoot = Enemy:FindFirstChild("HumanoidRootPart")
-			if enemyRoot then
-				local bv = Instance.new("BodyVelocity")
-				bv.Parent = enemyRoot
-				bv.MaxForce = Vector3.new(1,1,1) * 1000000
-				bv.P = 1250
-				bv.Velocity = RootPart.CFrame.LookVector * knockbackForce
-				game.Debris:AddItem(bv, 0.1)
-			end
-
-			-- 8. STATUS EFFECT: Apply stun tag to the enemy to prevent them from counter-attacking
-			CreateInst("Stunned", Enemy, stunDuration)
-		end,
-	})
+				end)
+			end)
+			-- Small staggered delay between each portal spawning for visual "flow"
+			task.wait(0.03 + math.random() * 0.03)
+		end
+	end
 end)
